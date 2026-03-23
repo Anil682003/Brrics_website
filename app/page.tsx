@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import Image from "next/image";
 
 interface ServiceItem { num: string; title: string; desc: string; tags: string[]; }
@@ -10,6 +10,278 @@ interface StatItem { val: number; suffix: string; lbl: string; }
 const ArrowRight = () => (<svg className="arrow-icon" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>);
 const ArrowUpRight = () => (<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 19.5l15-15m0 0H8.25m11.25 0v11.25"/></svg>);
 
+/* ─── Galaxy Canvas: GPU-accelerated star field with shooting stars ─── */
+function GalaxyCanvas() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animRef = useRef<number>(0);
+  const starsRef = useRef<{x:number;y:number;z:number;size:number;twinkleSpeed:number;twinkleOffset:number}[]>([]);
+  const shootingStarsRef = useRef<{x:number;y:number;vx:number;vy:number;life:number;maxLife:number;size:number}[]>([]);
+  const nebulaRef = useRef<{x:number;y:number;radius:number;drift:number;phase:number}[]>([]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d", { alpha: true });
+    if (!ctx) return;
+
+    let w = 0, h = 0;
+    const resize = () => {
+      const dpr = Math.min(window.devicePixelRatio, 2);
+      w = window.innerWidth;
+      h = window.innerHeight;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = w + "px";
+      canvas.style.height = h + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+
+    // Generate stars — fewer but smarter
+    const starCount = Math.min(Math.floor((w * h) / 4000), 350);
+    starsRef.current = Array.from({ length: starCount }, () => ({
+      x: Math.random() * w,
+      y: Math.random() * h,
+      z: Math.random(),
+      size: Math.random() * 1.8 + 0.3,
+      twinkleSpeed: Math.random() * 0.003 + 0.001,
+      twinkleOffset: Math.random() * Math.PI * 2,
+    }));
+
+    // Nebula clouds
+    nebulaRef.current = Array.from({ length: 4 }, () => ({
+      x: Math.random() * w,
+      y: Math.random() * h * 0.6,
+      radius: Math.random() * 250 + 150,
+      drift: (Math.random() - 0.5) * 0.15,
+      phase: Math.random() * Math.PI * 2,
+    }));
+
+    let lastShoot = 0;
+    let time = 0;
+
+    const draw = (now: number) => {
+      time = now * 0.001;
+      ctx.clearRect(0, 0, w, h);
+
+      // Draw nebula clouds (subtle white fog)
+      for (const n of nebulaRef.current) {
+        const nx = n.x + Math.sin(time * 0.1 + n.phase) * 30;
+        const ny = n.y + Math.cos(time * 0.08 + n.phase) * 20;
+        const pulse = 0.5 + Math.sin(time * 0.15 + n.phase) * 0.2;
+        const grad = ctx.createRadialGradient(nx, ny, 0, nx, ny, n.radius);
+        grad.addColorStop(0, `rgba(255,255,255,${0.012 * pulse})`);
+        grad.addColorStop(0.5, `rgba(255,255,255,${0.005 * pulse})`);
+        grad.addColorStop(1, "transparent");
+        ctx.fillStyle = grad;
+        ctx.fillRect(nx - n.radius, ny - n.radius, n.radius * 2, n.radius * 2);
+      }
+
+      // Draw stars with twinkling
+      for (const star of starsRef.current) {
+        const twinkle = 0.3 + Math.sin(time * star.twinkleSpeed * 1000 + star.twinkleOffset) * 0.35 + 0.35;
+        const alpha = twinkle * (0.25 + star.z * 0.65);
+        const sz = star.size * (0.6 + star.z * 0.4);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(star.x, star.y, sz, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Glow on brighter stars
+        if (star.z > 0.7 && sz > 1.2) {
+          ctx.globalAlpha = alpha * 0.15;
+          ctx.beginPath();
+          ctx.arc(star.x, star.y, sz * 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+
+      // Shooting stars — spawn every ~3-6s
+      if (now - lastShoot > 3000 + Math.random() * 3000) {
+        lastShoot = now;
+        const angle = Math.PI * 0.15 + Math.random() * Math.PI * 0.2;
+        const speed = 4 + Math.random() * 4;
+        shootingStarsRef.current.push({
+          x: Math.random() * w * 0.8,
+          y: Math.random() * h * 0.3,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 0,
+          maxLife: 40 + Math.random() * 30,
+          size: 1 + Math.random() * 1.5,
+        });
+      }
+
+      // Draw & update shooting stars
+      for (let i = shootingStarsRef.current.length - 1; i >= 0; i--) {
+        const s = shootingStarsRef.current[i];
+        s.x += s.vx;
+        s.y += s.vy;
+        s.life++;
+        const progress = s.life / s.maxLife;
+        const alpha = progress < 0.2 ? progress / 0.2 : 1 - (progress - 0.2) / 0.8;
+        const tailLen = 40 + s.size * 20;
+
+        const grad = ctx.createLinearGradient(
+          s.x, s.y,
+          s.x - s.vx * tailLen / Math.hypot(s.vx, s.vy),
+          s.y - s.vy * tailLen / Math.hypot(s.vx, s.vy)
+        );
+        grad.addColorStop(0, `rgba(255,255,255,${alpha * 0.8})`);
+        grad.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = s.size;
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y);
+        ctx.lineTo(
+          s.x - s.vx * tailLen / Math.hypot(s.vx, s.vy),
+          s.y - s.vy * tailLen / Math.hypot(s.vx, s.vy)
+        );
+        ctx.stroke();
+
+        if (s.life >= s.maxLife) shootingStarsRef.current.splice(i, 1);
+      }
+
+      animRef.current = requestAnimationFrame(draw);
+    };
+    animRef.current = requestAnimationFrame(draw);
+
+    let resizeTimer: ReturnType<typeof setTimeout>;
+    const debouncedResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(resize, 200); };
+    window.addEventListener("resize", debouncedResize);
+    return () => { cancelAnimationFrame(animRef.current); window.removeEventListener("resize", debouncedResize); };
+  }, []);
+
+  return <canvas ref={canvasRef} className="galaxy-canvas" />;
+}
+
+/* ─── Neural Network Canvas: AI section background ─── */
+function NeuralNetCanvas() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animRef = useRef<number>(0);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d", { alpha: true });
+    if (!ctx) return;
+
+    let w = 0, h = 0;
+    const resize = () => {
+      const dpr = Math.min(window.devicePixelRatio, 2);
+      w = canvas.parentElement?.offsetWidth || 800;
+      h = canvas.parentElement?.offsetHeight || 600;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+
+    // Create node positions
+    const nodes: {x:number;y:number;vx:number;vy:number;connections:number[]}[] = [];
+    const nodeCount = 35;
+    for (let i = 0; i < nodeCount; i++) {
+      nodes.push({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.3,
+        vy: (Math.random() - 0.5) * 0.3,
+        connections: [],
+      });
+    }
+
+    let pulseNodes: {from:number;to:number;progress:number;speed:number}[] = [];
+    let lastPulse = 0;
+
+    const draw = (now: number) => {
+      ctx.clearRect(0, 0, w, h);
+
+      // Move nodes gently
+      for (const n of nodes) {
+        n.x += n.vx;
+        n.y += n.vy;
+        if (n.x < 0 || n.x > w) n.vx *= -1;
+        if (n.y < 0 || n.y > h) n.vy *= -1;
+      }
+
+      // Draw connections
+      const maxDist = 180;
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const dx = nodes[i].x - nodes[j].x;
+          const dy = nodes[i].y - nodes[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < maxDist) {
+            const alpha = (1 - dist / maxDist) * 0.08;
+            ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+            ctx.lineWidth = 0.5;
+            ctx.beginPath();
+            ctx.moveTo(nodes[i].x, nodes[i].y);
+            ctx.lineTo(nodes[j].x, nodes[j].y);
+            ctx.stroke();
+          }
+        }
+      }
+
+      // Draw nodes
+      for (const n of nodes) {
+        ctx.fillStyle = "rgba(255,255,255,0.15)";
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Data pulses along connections
+      if (now - lastPulse > 800) {
+        lastPulse = now;
+        const from = Math.floor(Math.random() * nodes.length);
+        let closest = -1, closestDist = Infinity;
+        for (let j = 0; j < nodes.length; j++) {
+          if (j === from) continue;
+          const d = Math.hypot(nodes[from].x - nodes[j].x, nodes[from].y - nodes[j].y);
+          if (d < maxDist && d < closestDist) { closest = j; closestDist = d; }
+        }
+        if (closest >= 0) {
+          pulseNodes.push({ from, to: closest, progress: 0, speed: 0.015 + Math.random() * 0.01 });
+        }
+      }
+
+      for (let i = pulseNodes.length - 1; i >= 0; i--) {
+        const p = pulseNodes[i];
+        p.progress += p.speed;
+        const a = nodes[p.from], b = nodes[p.to];
+        const px = a.x + (b.x - a.x) * p.progress;
+        const py = a.y + (b.y - a.y) * p.progress;
+        const alpha = p.progress < 0.5 ? p.progress * 2 : (1 - p.progress) * 2;
+        ctx.fillStyle = `rgba(255,255,255,${alpha * 0.6})`;
+        ctx.beginPath();
+        ctx.arc(px, py, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = `rgba(255,255,255,${alpha * 0.15})`;
+        ctx.beginPath();
+        ctx.arc(px, py, 10, 0, Math.PI * 2);
+        ctx.fill();
+        if (p.progress >= 1) pulseNodes.splice(i, 1);
+      }
+
+      animRef.current = requestAnimationFrame(draw);
+    };
+    animRef.current = requestAnimationFrame(draw);
+
+    let rt: ReturnType<typeof setTimeout>;
+    const dr = () => { clearTimeout(rt); rt = setTimeout(resize, 200); };
+    window.addEventListener("resize", dr);
+    return () => { cancelAnimationFrame(animRef.current); window.removeEventListener("resize", dr); };
+  }, []);
+
+  return <canvas ref={canvasRef} style={{ position:"absolute", inset:0, pointerEvents:"none" }} />;
+}
+
+/* ─── Hooks ─── */
 function useScrollReveal() {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -75,7 +347,7 @@ function useCounter(target: number, trigger: boolean, duration = 2200) {
 function StatCounter({ target, suffix, label }: { target: number; suffix: string; label: string }) {
   const { ref, inView } = useInView(0.3);
   const count = useCounter(target, inView);
-  return (<div ref={ref} className="stat-item"><span className="stat-val">{count}{suffix}</span><span className="stat-lbl">{label}</span><span className="stat-dot">•</span></div>);
+  return (<div ref={ref} className="stat-item"><span className="stat-val">{count}{suffix}</span><span className="stat-lbl">{label}</span><span className="stat-dot">&middot;</span></div>);
 }
 
 function MagneticWrap({ children, className = "" }: { children: React.ReactNode; className?: string }) {
@@ -95,6 +367,26 @@ function ProjectShapes({ color, type }: { color: string; type: string }) {
   return (<div className="shapes"><div className="shape-box"><div className="shape-spin" style={{ position:"absolute", inset:32, border:`1px solid rgba(${color},0.15)`, borderRadius:16, transform:"rotate(12deg)" }}/><div className="shape-spin-rev" style={{ position:"absolute", inset:64, border:`1px solid rgba(${color},0.1)`, borderRadius:12, transform:"rotate(-6deg)" }}/><div style={{ position:"absolute", inset:96, background:`rgba(${color},0.04)`, borderRadius:8 }}/><div className="shape-breathe" style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", width:80, height:80, background:`rgba(${color},0.08)`, borderRadius:"50%", filter:"blur(20px)" }}/></div></div>);
 }
 
+/* ─── AI Orbit Animation Component ─── */
+function AIOrbit() {
+  return (
+    <div className="ai-orbit-wrap">
+      <div className="ai-orbit-ring ai-ring-1">
+        <div className="ai-orbit-node" />
+      </div>
+      <div className="ai-orbit-ring ai-ring-2">
+        <div className="ai-orbit-node n2" />
+      </div>
+      <div className="ai-orbit-ring ai-ring-3">
+        <div className="ai-orbit-node n3" />
+      </div>
+      <div className="ai-core-glow" />
+      <div className="ai-core-text">AI</div>
+    </div>
+  );
+}
+
+/* ─── Data ─── */
 const services: ServiceItem[] = [
   { num: "01", title: "Digital Strategy", desc: "Data-driven roadmaps that align technology with business goals. We decode market complexity into actionable digital blueprints.", tags: ["Research", "Analytics", "Roadmapping"] },
   { num: "02", title: "Design & Branding", desc: "Visual identities that cut through noise. From brand systems to immersive interfaces, every pixel serves a purpose.", tags: ["UI/UX", "Brand Identity", "Motion Design"] },
@@ -102,10 +394,18 @@ const services: ServiceItem[] = [
   { num: "04", title: "Growth & Launch", desc: "From MVP to market dominance. We orchestrate launches, optimize funnels, and accelerate traction with precision.", tags: ["SEO", "Performance", "Launch Strategy"] },
 ];
 
+const aiCapabilities = [
+  { icon: "⟁", title: "Predictive Intelligence", desc: "Custom ML models that anticipate user behavior, market shifts, and operational bottlenecks before they happen." },
+  { icon: "◎", title: "Natural Language Systems", desc: "Conversational AI, document processing, and intelligent search — powered by LLMs fine-tuned to your domain." },
+  { icon: "⬡", title: "Computer Vision", desc: "From quality control to real-time object detection. Visual AI that sees what humans miss at scale." },
+  { icon: "△", title: "AI Product Development", desc: "We're building our own AI products. From concept to deployment — AI-native tools that reshape workflows." },
+];
+
 const projects: ProjectItem[] = [
   { title: "Neural Commerce Platform", desc: "A next-gen e-commerce ecosystem powered by real-time AI personalization. Predictive inventory, dynamic pricing, and a conversational shopping interface that boosted conversion by 340%.", cat: "E-Commerce · AI Integration", metricVal: "340%", metricLbl: "Conversion Uplift", techs: ["Next.js", "Python", "TensorFlow", "AWS"], gradient: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01), transparent)", shapeColor: "255,255,255", shapes: "rounded" },
   { title: "Orbital — Fintech Dashboard", desc: "Real-time financial analytics platform processing 2M+ transactions daily. Interactive 3D data visualizations, custom charting engine, and sub-100ms query response times.", cat: "Finance · Data Visualization", metricVal: "2M+", metricLbl: "Daily Transactions", techs: ["React", "Go", "PostgreSQL", "WebGL"], gradient: "linear-gradient(135deg, rgba(255,255,255,0.03), rgba(200,200,200,0.02), transparent)", shapeColor: "200,200,200", shapes: "circles" },
   { title: "Meridian Health System", desc: "Connected health monitoring platform integrating 50K+ IoT devices. HIPAA-compliant infrastructure with real-time patient data streams and predictive alert systems.", cat: "Healthcare · IoT Platform", metricVal: "50K+", metricLbl: "Connected Devices", techs: ["TypeScript", "Rust", "MQTT", "GCP"], gradient: "linear-gradient(135deg, rgba(255,255,255,0.035), rgba(220,220,220,0.015), transparent)", shapeColor: "220,220,220", shapes: "diamonds" },
+  { title: "Synthex — AI Code Assistant", desc: "Our flagship AI product. An intelligent code assistant that understands entire codebases, suggests architecture patterns, and writes production-ready code with 94% acceptance rate.", cat: "AI Product · Developer Tools", metricVal: "94%", metricLbl: "Acceptance Rate", techs: ["Python", "Transformers", "Rust", "WASM"], gradient: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(240,240,240,0.015), transparent)", shapeColor: "240,240,240", shapes: "circles" },
 ];
 
 const statsData: StatItem[] = [
@@ -133,7 +433,7 @@ export default function BrricsPage() {
     const move = (e: MouseEvent) => setCursorPos({ x: e.clientX, y: e.clientY });
     window.addEventListener("mousemove", move, { passive: true });
     const addH = () => setCursorHover(true); const remH = () => setCursorHover(false);
-    const els = document.querySelectorAll("a, button, .project-card, .service-card, .magnetic");
+    const els = document.querySelectorAll("a, button, .project-card, .service-card, .magnetic, .ai-cap-card");
     els.forEach((el) => { el.addEventListener("mouseenter", addH); el.addEventListener("mouseleave", remH); });
     return () => { window.removeEventListener("mousemove", move); els.forEach((el) => { el.removeEventListener("mouseenter", addH); el.removeEventListener("mouseleave", remH); }); };
   }, [loaded]);
@@ -155,6 +455,11 @@ export default function BrricsPage() {
 @import url("https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Instrument+Sans:wght@400;500;600;700&display=swap");
 :root{--bg:#020202;--bg2:#080808;--surface:#0c0c0c;--border:#1a1a1a;--border-hi:#2e2e2e;--text:#eaeaea;--text-dim:#777;--text-muted:#444;--white:#fff;--font-display:"Outfit",sans-serif;--font-body:"Instrument Sans",sans-serif}
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}html{scroll-behavior:smooth;cursor:none}body{background:var(--bg);color:var(--text);font-family:var(--font-body);overflow-x:hidden;cursor:none}a,button{cursor:none}::selection{background:rgba(255,255,255,.12);color:#fff}::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:2px}
+
+/* Galaxy canvas */
+.galaxy-canvas{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:0;animation:galaxyFadeIn 3s 0.8s forwards}
+@keyframes galaxyFadeIn{to{opacity:1}}
+
 .cursor-dot{position:fixed;top:0;left:0;z-index:99999;pointer-events:none;width:8px;height:8px;background:var(--white);border-radius:50%;transition:transform .15s ease,opacity .3s;mix-blend-mode:difference}
 .cursor-ring{position:fixed;top:0;left:0;z-index:99998;pointer-events:none;width:40px;height:40px;border:1px solid rgba(255,255,255,.3);border-radius:50%;transition:all .25s cubic-bezier(.16,1,.3,1);mix-blend-mode:difference}.cursor-ring.hover{width:64px;height:64px;border-color:rgba(255,255,255,.5)}
 .page-loader{position:fixed;inset:0;z-index:10000;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;transition:opacity .6s cubic-bezier(.16,1,.3,1) .1s,visibility .6s}.page-loader.done{opacity:0;visibility:hidden;pointer-events:none}
@@ -174,7 +479,7 @@ nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:28px 0;transition:al
 .nav-links{display:flex;align-items:center;gap:44px}.nav-links a{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--text-muted);text-decoration:none;font-weight:600;transition:color .4s;position:relative}.nav-links a:hover{color:var(--white)}.nav-links a::after{content:'';position:absolute;bottom:-6px;left:0;width:0;height:1px;background:var(--white);transition:width .5s cubic-bezier(.16,1,.3,1)}.nav-links a:hover::after{width:100%}
 .nav-cta{margin-left:20px!important;padding:10px 28px!important;border:1px solid var(--border-hi)!important;transition:all .5s!important}.nav-cta:hover{background:var(--white)!important;color:var(--bg)!important;box-shadow:0 0 40px rgba(255,255,255,.08)!important}
 .mob-btn{display:none;background:none;border:none;padding:10px;flex-direction:column;gap:6px;z-index:200}.mob-btn span{display:block;width:26px;height:1.5px;background:var(--white);transition:all .4s cubic-bezier(.16,1,.3,1);transform-origin:center}.mob-btn.open span:nth-child(1){transform:rotate(45deg) translate(5px,5px)}.mob-btn.open span:nth-child(2){opacity:0;transform:scaleX(0)}.mob-btn.open span:nth-child(3){transform:rotate(-45deg) translate(5px,-5px)}
-.mob-menu{position:fixed;inset:0;z-index:99;background:rgba(2,2,2,.97);backdrop-filter:blur(40px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:36px;opacity:0;visibility:hidden;transition:all .6s cubic-bezier(.16,1,.3,1)}.mob-menu.open{opacity:1;visibility:visible}.mob-menu a{font-family:var(--font-display);font-size:32px;font-weight:700;color:var(--white);text-decoration:none;letter-spacing:.03em;opacity:0;transform:translateY(30px) scale(.95);transition:all .5s cubic-bezier(.16,1,.3,1)}.mob-menu.open a{opacity:1;transform:translateY(0) scale(1)}.mob-menu.open a:nth-child(1){transition-delay:.1s}.mob-menu.open a:nth-child(2){transition-delay:.15s}.mob-menu.open a:nth-child(3){transition-delay:.2s}.mob-menu.open a:nth-child(4){transition-delay:.25s}.mob-menu.open a:nth-child(5){transition-delay:.3s}
+.mob-menu{position:fixed;inset:0;z-index:99;background:rgba(2,2,2,.97);backdrop-filter:blur(40px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:36px;opacity:0;visibility:hidden;transition:all .6s cubic-bezier(.16,1,.3,1)}.mob-menu.open{opacity:1;visibility:visible}.mob-menu a{font-family:var(--font-display);font-size:32px;font-weight:700;color:var(--white);text-decoration:none;letter-spacing:.03em;opacity:0;transform:translateY(30px) scale(.95);transition:all .5s cubic-bezier(.16,1,.3,1)}.mob-menu.open a{opacity:1;transform:translateY(0) scale(1)}.mob-menu.open a:nth-child(1){transition-delay:.1s}.mob-menu.open a:nth-child(2){transition-delay:.15s}.mob-menu.open a:nth-child(3){transition-delay:.2s}.mob-menu.open a:nth-child(4){transition-delay:.25s}.mob-menu.open a:nth-child(5){transition-delay:.3s}.mob-menu.open a:nth-child(6){transition-delay:.35s}
 .hero{position:relative;min-height:100vh;display:flex;align-items:center;justify-content:center;overflow:hidden}.hero-inner{position:relative;z-index:10;max-width:1360px;margin:0 auto;padding:0 36px;text-align:center}
 .pill{display:inline-flex;align-items:center;margin-top:122px;gap:12px;padding:10px 24px;border:1px solid var(--border);border-radius:999px;margin-bottom:52px;position:relative;overflow:hidden}.pill::before{content:'';position:absolute;inset:0;margin-top:82px;border-radius:999px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.03),transparent);animation:shimmer 4s linear infinite;background-size:300% 100%}.pill-dot{width:8px;height:8px;border-radius:50%;background:var(--white);animation:pulse 2s infinite;box-shadow:0 0 12px rgba(255,255,255,.3)}.pill-text{font-size:10px;letter-spacing:.35em;text-transform:uppercase;color:var(--text-dim);font-weight:600}
 .hero h1{font-family:var(--font-display);font-size:clamp(3.5rem,10vw,8rem);font-weight:900;line-height:.9;letter-spacing:-.04em;min-height:2em}.hero-scramble{font-family:var(--font-display);display:inline-block}
@@ -204,6 +509,39 @@ section{position:relative}.section-wrap{max-width:1360px;margin:0 auto;padding:0
 .shape-spin{position:absolute;animation:spinSlow 50s linear infinite}.shape-spin-rev{position:absolute;animation:spinSlowRev 60s linear infinite}.shape-float{animation:float 4s ease-in-out infinite}.shape-float-delay{animation:floatDelay 5s ease-in-out infinite}.shape-breathe{animation:breathe 5s ease-in-out infinite}
 .marquee-wrap{overflow:hidden;padding:96px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);position:relative}.marquee-wrap::before,.marquee-wrap::after{content:'';position:absolute;top:0;bottom:0;width:150px;z-index:2;pointer-events:none}.marquee-wrap::before{left:0;background:linear-gradient(90deg,var(--bg),transparent)}.marquee-wrap::after{right:0;background:linear-gradient(270deg,var(--bg),transparent)}
 .marquee-track{display:flex;animation:marquee 40s linear infinite;width:max-content}.marquee-track:hover{animation-play-state:paused}.stat-item{display:flex;align-items:center;gap:24px;white-space:nowrap;padding:0 44px}.stat-val{font-family:var(--font-display);font-size:clamp(2rem,4vw,3.5rem);font-weight:800;color:var(--white);font-variant-numeric:tabular-nums;letter-spacing:-.02em}.stat-lbl{font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--text-muted);font-weight:600}.stat-dot{color:var(--border);font-size:24px}
+
+/* ── AI Section ── */
+.ai-section{position:relative;overflow:hidden;padding:150px 0}
+.ai-section-bg{position:absolute;inset:0;overflow:hidden}
+.ai-grid{display:grid;grid-template-columns:1fr;gap:32px;position:relative;z-index:2}
+.ai-header{text-align:center;margin-bottom:40px}
+.ai-badge{display:inline-flex;align-items:center;gap:10px;padding:8px 20px;border:1px solid var(--border);border-radius:999px;margin-bottom:32px;font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--text-dim);font-weight:600;position:relative;overflow:hidden}
+.ai-badge::before{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.03),transparent);animation:shimmer 3s linear infinite;background-size:300% 100%}
+.ai-badge-dot{width:6px;height:6px;border-radius:50%;background:var(--white);animation:pulse 1.5s infinite;box-shadow:0 0 8px rgba(255,255,255,.4)}
+.ai-cap-grid{display:grid;grid-template-columns:1fr;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:16px;overflow:hidden}
+.ai-cap-card{position:relative;padding:48px;background:var(--bg);transition:all .6s cubic-bezier(.16,1,.3,1);overflow:hidden}
+.ai-cap-card::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at 30% 0%,rgba(255,255,255,.02),transparent 60%);opacity:0;transition:opacity .6s}
+.ai-cap-card:hover{background:var(--surface)}.ai-cap-card:hover::before{opacity:1}
+.ai-cap-icon{font-size:28px;color:rgba(255,255,255,.2);margin-bottom:24px;display:block;transition:all .6s}.ai-cap-card:hover .ai-cap-icon{color:rgba(255,255,255,.5);transform:scale(1.1)}
+.ai-cap-card h3{font-family:var(--font-display);font-size:clamp(1.25rem,2vw,1.5rem);font-weight:700;color:var(--white);margin-bottom:12px;letter-spacing:-.02em}
+.ai-cap-card p{color:var(--text-dim);line-height:1.9;font-weight:400;font-size:14px}
+.ai-cap-card .ai-card-line{position:absolute;bottom:0;left:0;width:0;height:1px;background:linear-gradient(90deg,rgba(255,255,255,.15),transparent);transition:width 1s cubic-bezier(.16,1,.3,1)}.ai-cap-card:hover .ai-card-line{width:100%}
+
+/* AI Orbit */
+.ai-orbit-wrap{position:relative;width:320px;height:320px;margin:0 auto}
+.ai-orbit-ring{position:absolute;border-radius:50%;border:1px solid rgba(255,255,255,.06)}
+.ai-ring-1{inset:0;animation:spinSlow 30s linear infinite}
+.ai-ring-2{inset:40px;animation:spinSlowRev 24s linear infinite}
+.ai-ring-3{inset:80px;animation:spinSlow 18s linear infinite}
+.ai-orbit-node{position:absolute;top:-4px;left:50%;width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.4);box-shadow:0 0 16px rgba(255,255,255,.2)}
+.ai-orbit-node.n2{top:auto;bottom:-3px;left:30%;width:6px;height:6px;background:rgba(255,255,255,.25)}
+.ai-orbit-node.n3{top:50%;right:-3px;left:auto;width:5px;height:5px;background:rgba(255,255,255,.3)}
+.ai-core-glow{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:80px;height:80px;background:radial-gradient(circle,rgba(255,255,255,.06),transparent 70%);border-radius:50%;animation:breathe 6s ease-in-out infinite}
+.ai-core-text{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:var(--font-display);font-size:24px;font-weight:800;color:rgba(255,255,255,.15);letter-spacing:.15em}
+
+/* Constellation connector lines between AI cards */
+.ai-constellation{position:absolute;inset:0;pointer-events:none;z-index:1}
+
 .about-grid{display:grid;grid-template-columns:1fr;gap:64px;align-items:center}.about-visual{position:relative;aspect-ratio:1;max-width:520px;margin:0 auto}.about-frame{position:absolute;inset:0;border:1px solid var(--border);transform:rotate(3deg);transition:all .8s cubic-bezier(.16,1,.3,1)}.about-visual:hover .about-frame{transform:rotate(.5deg);border-color:var(--border-hi)}.about-frame-inner{position:absolute;inset:18px;border:1px solid rgba(255,255,255,.03);transform:rotate(-2deg);transition:transform .8s}.about-visual:hover .about-frame-inner{transform:rotate(-.5deg)}.about-frame-bg{position:absolute;inset:36px;background:var(--surface)}
 .about-logo{inset:0;display:flex;align-items:center;justify-content:center;z-index:10}.about-logo-img{opacity:.6;transition:all .8s cubic-bezier(.16,1,.3,1);filter:drop-shadow(0 0 30px rgba(255,255,255,.05))}.about-visual:hover .about-logo-img{opacity:1;filter:drop-shadow(0 0 60px rgba(255,255,255,.1));transform:scale(1.08) rotate(-2deg)}
 .about-corner-tl{position:absolute;top:-14px;left:-14px;width:28px;height:28px;border-top:1px solid var(--border-hi);border-left:1px solid var(--border-hi)}.about-corner-br{position:absolute;bottom:-14px;right:-14px;width:28px;height:28px;border-bottom:1px solid var(--border-hi);border-right:1px solid var(--border-hi)}.about-corner-tr{position:absolute;top:-14px;right:-14px;width:14px;height:14px;border-top:1px solid rgba(255,255,255,.06);border-right:1px solid rgba(255,255,255,.06)}.about-corner-bl{position:absolute;bottom:-14px;left:-14px;width:14px;height:14px;border-bottom:1px solid rgba(255,255,255,.06);border-left:1px solid rgba(255,255,255,.06)}
@@ -216,25 +554,34 @@ footer{border-top:1px solid var(--border);padding:80px 0}.footer-grid{display:gr
 .footer-col h4{font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--text-muted);font-weight:700;margin-bottom:28px}.footer-col a{display:block;font-size:13px;color:var(--text-dim);text-decoration:none;margin-bottom:16px;transition:all .4s;font-weight:400;position:relative;padding-left:0}.footer-col a:hover{color:var(--white);padding-left:12px}.footer-col a::before{content:'';position:absolute;left:0;top:50%;width:0;height:1px;background:var(--white);transition:width .4s cubic-bezier(.16,1,.3,1);transform:translateY(-50%)}.footer-col a:hover::before{width:6px}
 .footer-bottom{padding-top:36px;border-top:1px solid rgba(255,255,255,.03);display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16px}.footer-bottom span{font-size:11px;color:var(--text-muted);letter-spacing:.05em}.footer-bottom a{font-size:11px;color:var(--text-muted);text-decoration:none;transition:color .3s}.footer-bottom a:hover{color:var(--text-dim)}
 .arrow-icon{width:16px;height:16px;transition:transform .5s cubic-bezier(.16,1,.3,1)}.btn-primary:hover .arrow-icon,.btn-outline:hover .arrow-icon,.project-card:hover .case-link .arrow-icon{transform:translateX(6px)}
-@media(min-width:768px){.services-grid{grid-template-columns:1fr 1fr}.footer-grid{grid-template-columns:2fr 1fr 1fr}}
+
+/* Horizontal scroll text banner */
+.ai-scroll-banner{overflow:hidden;padding:24px 0;border-top:1px solid rgba(255,255,255,.03);border-bottom:1px solid rgba(255,255,255,.03);position:relative}
+.ai-scroll-track{display:flex;animation:marquee 30s linear infinite;width:max-content}
+.ai-scroll-item{white-space:nowrap;padding:0 48px;font-family:var(--font-display);font-size:12px;letter-spacing:.4em;text-transform:uppercase;color:rgba(255,255,255,.08);font-weight:800}
+
+@media(min-width:768px){.services-grid{grid-template-columns:1fr 1fr}.footer-grid{grid-template-columns:2fr 1fr 1fr}.ai-cap-grid{grid-template-columns:1fr 1fr}}
 @media(min-width:1024px){.section-header{flex-direction:row;align-items:flex-end;justify-content:space-between}.stat-item{padding:0 56px}.about-grid{grid-template-columns:1fr 1fr;gap:100px}.project-info{padding:56px;margin-top:-110px}}
-@media(max-width:768px){.nav-links{display:none}.mob-btn{display:flex}.orb{display:none}.project-info{padding:24px;margin-top:-60px}.cta-ring,.cta-ring-2{display:none}.dl3{display:none}.cursor-dot,.cursor-ring{display:none}html,body,a,button{cursor:auto!important}.vignette{display:none}}
+@media(max-width:768px){.nav-links{display:none}.mob-btn{display:flex}.orb{display:none}.project-info{padding:24px;margin-top:-60px}.cta-ring,.cta-ring-2{display:none}.dl3{display:none}.cursor-dot,.cursor-ring{display:none}html,body,a,button{cursor:auto!important}.vignette{display:none}.ai-orbit-wrap{width:220px;height:220px}}
 @media(min-width:769px){.mob-btn{display:none}.mob-menu{display:none}}
   `}</style>
 
     <div ref={pageRef}>
+      {/* Galaxy starfield — GPU composited, fixed behind everything */}
+      <GalaxyCanvas />
+
       <div className="cursor-dot" style={{ transform: `translate(${cursorPos.x - 4}px, ${cursorPos.y - 4}px)` }} />
       <div className={`cursor-ring ${cursorHover ? "hover" : ""}`} style={{ transform: `translate(${cursorPos.x - 20}px, ${cursorPos.y - 20}px)` }} />
       <div className={`page-loader ${loaded ? "done" : ""}`}><div className="loader-logo"><Image src="/logo.png" alt="BRRICS" width={200} height={200} style={{ objectFit: "contain" }} /></div><div className="loader-bar"><div className="loader-fill" /></div></div>
       <div className="noise" /><div className="vignette" />
       <div className={`mob-menu ${menuOpen ? "open" : ""}`}>
-        <a href="#services" onClick={() => setMenuOpen(false)}>Services</a><a href="#projects" onClick={() => setMenuOpen(false)}>Projects</a><a href="#about" onClick={() => setMenuOpen(false)}>About</a><a href="#contact" onClick={() => setMenuOpen(false)}>Contact</a><a href="#contact" onClick={() => setMenuOpen(false)}>Get in Touch</a>
+        <a href="#services" onClick={() => setMenuOpen(false)}>Services</a><a href="#ai" onClick={() => setMenuOpen(false)}>AI Solutions</a><a href="#projects" onClick={() => setMenuOpen(false)}>Projects</a><a href="#about" onClick={() => setMenuOpen(false)}>About</a><a href="#contact" onClick={() => setMenuOpen(false)}>Contact</a><a href="#contact" onClick={() => setMenuOpen(false)}>Get in Touch</a>
       </div>
 
       <nav className={navScrolled ? "scrolled" : ""}>
         <div className="nav-inner">
           <a href="#" className="nav-logo"><Image src="/logo.png" alt="BRRICS" width={130} height={130} style={{ objectFit: "contain" }} priority /><span className="logo-text"></span></a>
-          <div className="nav-links"><a href="#services">Services</a><a href="#projects">Projects</a><a href="#about">About</a><a href="#contact">Contact</a><a href="#contact" className="nav-cta">Get in Touch</a></div>
+          <div className="nav-links"><a href="#services">Services</a><a href="#ai">AI Solutions</a><a href="#projects">Projects</a><a href="#about">About</a><a href="#contact">Contact</a><a href="#contact" className="nav-cta">Get in Touch</a></div>
           <button className={`mob-btn ${menuOpen ? "open" : ""}`} onClick={() => setMenuOpen(!menuOpen)} aria-label="Menu"><span /><span /><span /></button>
         </div>
       </nav>
@@ -243,10 +590,10 @@ footer{border-top:1px solid var(--border);padding:80px 0}.footer-grid{display:gr
         <div className="grid-bg" /><div className="orb orb1" style={{ transform: `translate(${mouse.x*25}px, ${mouse.y*25}px)` }} /><div className="orb orb2" style={{ transform: `translate(${mouse.x*-18}px, ${mouse.y*-18}px)` }} /><div className="orb orb3" style={{ transform: `translate(${mouse.x*12}px, ${mouse.y*12}px)` }} />
         <div className="deco-line dl1" /><div className="deco-line dl2" /><div className="deco-line dl3" />
         <div className="hero-inner">
-          <div className="pill reveal"><span className="pill-dot" /><span className="pill-text">Technology Platform — Est. 2026</span></div>
+          <div className="pill reveal"><span className="pill-dot" /><span className="pill-text">AI-Powered Technology Platform — Est. 2026</span></div>
           <h1 className="reveal d1"><span className="tc hero-scramble">{heroLine1 || "\u00A0"}</span><br /><span className="tc hero-scramble" style={{ position: "relative", display: "inline-block" }}>{heroLine2 || "\u00A0"}<svg className="hero-underline" viewBox="0 0 300 12" fill="none"><path d="M2 8C50 3 100 2 150 5C200 8 250 4 298 6" stroke="rgba(255,255,255,0.12)" strokeWidth="2" strokeLinecap="round" /></svg></span></h1>
-          <p className="reveal d3">Strategy. Design. Engineering.<br />Crafting Digital experiences that matter.</p>
-          <div className="hero-btns reveal d5"><MagneticWrap><a href="#projects" className="btn-primary">View Our Work <ArrowRight /></a></MagneticWrap><MagneticWrap><a href="#contact" className="btn-secondary">Start a Project</a></MagneticWrap></div>
+          <p className="reveal d3">Strategy. Design. Engineering. AI.<br />Building intelligent digital experiences that matter.</p>
+          <div className="hero-btns reveal d5"><MagneticWrap><a href="#projects" className="btn-primary">View Our Work <ArrowRight /></a></MagneticWrap><MagneticWrap><a href="#ai" className="btn-secondary">Explore AI Solutions</a></MagneticWrap></div>
         </div>
         <div className="scroll-ind reveal d8"><span>Scroll</span><div className="scroll-line" /></div>
       </section>
@@ -255,6 +602,54 @@ footer{border-top:1px solid var(--border);padding:80px 0}.footer-grid{display:gr
         <div className="section-header"><div><span className="section-label reveal">What We Do</span><h2 className="section-title tc reveal d1">Services</h2></div><p className="section-desc reveal d2">End-to-end digital capabilities. From first concept to final deployment, we cover every layer of the stack.</p></div>
         <div className="services-grid">{services.map((s, i) => (<div key={s.num} className={`service-card reveal d${i + 2}`}><div className="corner" /><div className="service-num">{s.num}</div><h3>{s.title}</h3><p>{s.desc}</p><div className="tags">{s.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div><div className="service-arrow"><ArrowUpRight /></div></div>))}</div>
       </div></section>
+
+      <div className="divider" />
+
+      {/* ── AI Solutions Section ── */}
+      <section id="ai" className="ai-section">
+        <div className="ai-section-bg"><NeuralNetCanvas /></div>
+        <div className="section-wrap">
+          <div className="ai-header">
+            <div className="ai-badge reveal"><span className="ai-badge-dot" />Artificial Intelligence</div>
+            <h2 className="section-title tc reveal d1" style={{ textAlign:"center" }}>AI-Native Solutions</h2>
+            <p className="section-desc reveal d2" style={{ textAlign:"center", margin:"24px auto 0", maxWidth:560 }}>We don&apos;t just integrate AI — we build it. From custom models to full AI products, intelligence is in our DNA.</p>
+          </div>
+
+          <div style={{ display:"flex", justifyContent:"center", margin:"64px 0" }} className="reveal d3">
+            <AIOrbit />
+          </div>
+
+          <div className="ai-cap-grid reveal d4">
+            {aiCapabilities.map((cap, i) => (
+              <div key={cap.title} className="ai-cap-card">
+                <span className="ai-cap-icon">{cap.icon}</span>
+                <h3>{cap.title}</h3>
+                <p>{cap.desc}</p>
+                <div className="ai-card-line" />
+              </div>
+            ))}
+          </div>
+
+          <div style={{ textAlign:"center", marginTop:64 }} className="reveal d5">
+            <MagneticWrap>
+              <a href="#contact" className="btn-outline"><span>Build With AI</span> <ArrowRight /></a>
+            </MagneticWrap>
+          </div>
+        </div>
+      </section>
+
+      {/* AI keywords scroll */}
+      <div className="ai-scroll-banner">
+        <div className="ai-scroll-track">
+          {[0, 1].map((dup) => (
+            <div key={dup} style={{ display:"flex" }}>
+              {["Machine Learning", "Neural Networks", "Computer Vision", "NLP", "Generative AI", "Predictive Analytics", "Deep Learning", "AI Products", "LLM Fine-Tuning", "Edge AI"].map((t) => (
+                <span key={`${dup}-${t}`} className="ai-scroll-item">{t}</span>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
 
       <div className="divider" />
 
@@ -267,23 +662,23 @@ footer{border-top:1px solid var(--border);padding:80px 0}.footer-grid{display:gr
 
       <section id="about" style={{ padding: "150px 0" }}><div className="section-wrap"><div className="about-grid">
         <div className="about-visual reveal d2"><div className="about-frame"><div className="about-frame-inner" /><div className="about-frame-bg" /></div><div className="about-logo"><Image src="/logo.png" alt="BRRICS" width={400} height={150} className="about-logo-img" style={{ objectFit: "contain" }} /></div><div className="about-corner-tl" /><div className="about-corner-br" /><div className="about-corner-tr" /><div className="about-corner-bl" /></div>
-        <div className="about-text"><span className="section-label reveal">Who We Are</span><h2 className="reveal d1"><span className="tc">Obsessed with<br />craft &amp; impact</span></h2><p className="lead reveal d2">BRRICS is a collective of strategists, designers, and engineers united by a single belief: technology should amplify human potential, not complicate it.</p><p className="body reveal d3">We don&apos;t just build products — we architect experiences that define industries. From stealth startups to Fortune 500s, our work speaks for itself.</p><MagneticWrap className="reveal d4"><a href="#contact" className="btn-outline"><span>Learn More</span> <ArrowRight /></a></MagneticWrap></div>
+        <div className="about-text"><span className="section-label reveal">Who We Are</span><h2 className="reveal d1"><span className="tc">Obsessed with<br />craft &amp; intelligence</span></h2><p className="lead reveal d2">BRRICS is a collective of strategists, designers, engineers, and AI researchers united by a single belief: technology — especially intelligent technology — should amplify human potential, not complicate it.</p><p className="body reveal d3">We don&apos;t just build products — we architect AI-native experiences that define industries. From stealth startups to Fortune 500s, we&apos;re building the future with every line of code and every model we train.</p><MagneticWrap className="reveal d4"><a href="#contact" className="btn-outline"><span>Learn More</span> <ArrowRight /></a></MagneticWrap></div>
       </div></div></section>
 
       <div className="divider" />
 
       <section id="contact" className="cta"><div className="cta-glow" /><div className="cta-ring" /><div className="cta-ring-2" /><div className="cta-inner">
-        <span className="section-label reveal">Ready to start?</span><h2 className="reveal d1"><span className="tc">Let&apos;s build<br />something great</span></h2><p className="reveal d2">Got an idea that needs a world-class team? We&apos;re selective about the projects we take on — but if it&apos;s ambitious, we&apos;re in.</p>
+        <span className="section-label reveal">Ready to start?</span><h2 className="reveal d1"><span className="tc">Let&apos;s build<br />something intelligent</span></h2><p className="reveal d2">Got an idea that needs a world-class team with AI expertise? We&apos;re selective about the projects we take on — but if it&apos;s ambitious, we&apos;re in.</p>
         <div className="cta-btns reveal d3"><MagneticWrap><a href="mailto:hello@brrics.com" className="btn-primary">hello@brrics.com <ArrowRight /></a></MagneticWrap><MagneticWrap><a href="#" className="btn-secondary">Book a Call</a></MagneticWrap></div>
       </div></section>
 
       <footer><div className="section-wrap">
         <div className="footer-grid">
-          <div className="footer-brand"><div style={{ display: "flex", alignItems: "center", gap: 14 }}><Image src="/logo.png" alt="BRRICS" width={100} height={100} style={{ objectFit: "contain" }} /><span className="logo-text" style={{ fontSize: 16 }}>Brrics</span></div><p>A futuristic digital agency crafting bold digital experiences. Strategy. Design. Engineering. Scale.</p></div>
-          <div className="footer-col"><h4>Navigation</h4><a href="#services">Services</a><a href="#projects">Projects</a><a href="#about">About</a><a href="#contact">Contact</a></div>
+          <div className="footer-brand"><div style={{ display: "flex", alignItems: "center", gap: 14 }}><Image src="/logo.png" alt="BRRICS" width={100} height={100} style={{ objectFit: "contain" }} /><span className="logo-text" style={{ fontSize: 16 }}>Brrics</span></div><p>An AI-native digital agency crafting bold, intelligent experiences. Strategy. Design. Engineering. AI. Scale.</p></div>
+          <div className="footer-col"><h4>Navigation</h4><a href="#services">Services</a><a href="#ai">AI Solutions</a><a href="#projects">Projects</a><a href="#about">About</a><a href="#contact">Contact</a></div>
           <div className="footer-col"><h4>Connect</h4><a href="#">Twitter / X</a><a href="#">LinkedIn</a><a href="#">Dribbble</a><a href="#">GitHub</a></div>
         </div>
-        <div className="footer-bottom"><span>&copy; 2024 BRRICS. All rights reserved.</span><div style={{ display: "flex", gap: 24 }}><a href="#">Privacy Policy</a><a href="#">Terms of Service</a></div></div>
+        <div className="footer-bottom"><span>&copy; 2026 BRRICS. All rights reserved.</span><div style={{ display: "flex", gap: 24 }}><a href="#">Privacy Policy</a><a href="#">Terms of Service</a></div></div>
       </div></footer>
     </div>
   </>);
